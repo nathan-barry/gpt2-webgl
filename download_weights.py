@@ -6,7 +6,7 @@ from transformers import GPT2LMHeadModel
 
 # 1) choose your model
 model_name = "gpt2"  # the 117M-param checkpoint
-out_dir    = "weights"
+out_dir    = "public/weights"
 os.makedirs(out_dir, exist_ok=True)
 
 # 2) load the HF model
