@@ -23,7 +23,10 @@ import { GPT2WebGL } from "./gpt2_webgl";
     stopB.disabled  = false;
     model.generate(
       input.value,
-      tok => { input.value += tok; },
+      tok => {
+        input.value += tok;
+        console.log(input.value);
+      },
       () => stopping
     ).then(() => {
       startB.disabled = false;

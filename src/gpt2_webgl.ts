@@ -32,6 +32,12 @@ export class GPT2WebGL {
   constructor(canvas: HTMLCanvasElement, manifest: WeightManifest) {
     const gl = canvas.getContext("webgl2");
     if (!gl) throw new Error("WebGL2 not supported");
+
+    // ask for float‐buffer support
+    if (!gl.getExtension("EXT_color_buffer_float")) {
+      throw new Error("EXT_color_buffer_float not supported — cannot render to float textures");
+    }
+
     this.gl = gl;
     this.manifest = manifest;
 
@@ -134,6 +140,8 @@ async loadWeights(): Promise<void> {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     this.textures[name] = tex;
   }
+
+  console.log("LOADING WEIGHTS DONE");
 }
 
   /** Compile & link all our little passes */
@@ -330,6 +338,35 @@ async loadWeights(): Promise<void> {
     return tex;
   }
 
+  private _drawTexture(tex: WebGLTexture) {
+    const gl = this.gl;
+    
+    // 1) clear the default framebuffer (your <canvas>)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    gl.clearColor(0, 0, 0, 1);            // <-- pick your clear color
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // 2) bind & configure your display‐shader
+    const prog = this.programs.display;
+    gl.useProgram(prog);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+    const pa = gl.getAttribLocation(prog, "a_position");
+    gl.enableVertexAttribArray(pa);
+    gl.vertexAttribPointer(pa, 2, gl.FLOAT, false, 0, 0);
+
+    // 3) bind the texture you want to show
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    const loc = gl.getUniformLocation(prog, "u_tex");
+    gl.uniform1i(loc, 0);
+
+    // 4) draw the quad over the entire canvas
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+
   private _runPass(
     name: string,
     inputs: { [u: string]: WebGLTexture },
@@ -429,6 +466,9 @@ async loadWeights(): Promise<void> {
       1,
       this.vocabSize
     );
+
+    // Draw
+    this._drawTexture(lg2);
 
     const out = new Float32Array(this.vocabSize);
     const fb = gl.createFramebuffer()!;
