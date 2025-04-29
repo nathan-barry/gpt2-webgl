@@ -96,9 +96,9 @@ export class GPT2WebGL {
       const arr = new Float32Array(buf);
       this.weightArrays[name] = arr;
 
-      // determine dims: only keep the 768×768 shortcut for c_attn/c_fc
+      // determine dims: only keep the 768×768 shortcut for c_attn
       let W: number, H: number;
-      if (name.startsWith("c_attn") || name.startsWith("c_fc")) {
+      if (name.startsWith("c_attn")) {
         W = this.nEmbeds;
         H = this.nEmbeds;
       } else {
@@ -703,6 +703,15 @@ export class GPT2WebGL {
       }
     }
     return idx;
+
+    // stochastic
+    // const r = Math.random();
+    // let cum = 0;
+    // for (let i = 0; i < probs.length; i++) {
+    //   cum += probs[i];
+    //   if (r < cum) return i;
+    // }
+    // return probs.length - 1;
   }
 
   async generate(
