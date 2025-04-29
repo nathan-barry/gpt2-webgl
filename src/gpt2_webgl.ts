@@ -1,7 +1,3 @@
-/*
- * Full GPT-2 forward inference in WebGL2, with a simple CPU tokenizer
- * and sampling loop, driven from index.html.
- */
 import { encodingForModel, Tiktoken } from "js-tiktoken";
 
 interface WeightManifest {
@@ -33,9 +29,11 @@ export class GPT2WebGL {
     const gl = canvas.getContext("webgl2");
     if (!gl) throw new Error("WebGL2 not supported");
 
-    // ask for float‐buffer support
+    // enable float‐buffer rendering
     if (!gl.getExtension("EXT_color_buffer_float")) {
-      throw new Error("EXT_color_buffer_float not supported — cannot render to float textures");
+      throw new Error(
+        "EXT_color_buffer_float not supported — cannot render to float textures"
+      );
     }
 
     this.gl = gl;
@@ -59,7 +57,7 @@ export class GPT2WebGL {
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(
       gl.ARRAY_BUFFER,
-      new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]),
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
       gl.STATIC_DRAW
     );
     this.quadBuffer = buf;
@@ -71,7 +69,7 @@ export class GPT2WebGL {
       out vec2 v_uv;
       void main() {
         v_uv = a_position * .5 + .5;
-        gl_Position = vec4(a_position,0,1);
+        gl_Position = vec4(a_position, 0, 1);
       }`;
     const fsrc = `#version 300 es
       precision highp float;
@@ -84,65 +82,68 @@ export class GPT2WebGL {
     this.programs.display = this._createProgram(vsrc, fsrc);
   }
 
-/** Load all weights as float32 textures */
-async loadWeights(): Promise<void> {
-  console.log("LOADING WEIGHTS");
+  /** Load all weights as float32 textures */
+  async loadWeights(): Promise<void> {
+    console.log("LOADING WEIGHTS");
 
-  const gl = this.gl;
-  const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    const gl = this.gl;
+    const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
 
-  for (const name in this.manifest) {
-    const url = this.manifest[name];
-    const res = await fetch(url);
-    const buf = await res.arrayBuffer();
-    const arr = new Float32Array(buf);
-    this.weightArrays[name] = arr;
+    for (const name in this.manifest) {
+      const url = this.manifest[name];
+      const res = await fetch(url);
+      const buf = await res.arrayBuffer();
+      const arr = new Float32Array(buf);
+      this.weightArrays[name] = arr;
 
-    // determine dims: only keep the 768×768 shortcut for c_attn/c_fc
-    let W: number, H: number;
-    if (name.startsWith("c_attn") || name.startsWith("c_fc")) {
-      W = this.nEmbeds;
-      H = this.nEmbeds;
-    } else {
-      // generic tiling for everything else (including lm_head_w):
-      const total = arr.length;
-      W = Math.min(total, maxTex);
-      H = Math.ceil(total / W);
+      // determine dims: only keep the 768×768 shortcut for c_attn/c_fc
+      let W: number, H: number;
+      if (name.startsWith("c_attn") || name.startsWith("c_fc")) {
+        W = this.nEmbeds;
+        H = this.nEmbeds;
+      } else {
+        // generic tiling for everything else (including lm_head_w):
+        const total = arr.length;
+        W = Math.min(total, maxTex);
+        H = Math.ceil(total / W);
+      }
+      this.tileInfo[name] = { width: W, height: H };
+
+      // pad to W*H if needed
+      const needed = W * H;
+      const uploadData =
+        arr.length === needed
+          ? arr
+          : (() => {
+              const tmp = new Float32Array(needed);
+              tmp.set(arr, 0);
+              return tmp;
+            })();
+
+      // upload GPU texture
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.R32F,
+        W,
+        H,
+        0,
+        gl.RED,
+        gl.FLOAT,
+        uploadData
+      );
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      // clamp to edge to be safe
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      this.textures[name] = tex;
     }
-    this.tileInfo[name] = { width: W, height: H };
 
-    // pad to W*H if needed
-    const needed = W * H;
-    const uploadData =
-      arr.length === needed
-        ? arr
-        : (() => {
-            const tmp = new Float32Array(needed);
-            tmp.set(arr, 0);
-            return tmp;
-          })();
-
-    // upload GPU texture
-    const tex = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.R32F,
-      W,
-      H,
-      0,
-      gl.RED,
-      gl.FLOAT,
-      uploadData
-    );
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    this.textures[name] = tex;
+    console.log("LOADING WEIGHTS DONE");
   }
-
-  console.log("LOADING WEIGHTS DONE");
-}
 
   /** Compile & link all our little passes */
   private _initShaders() {
@@ -267,21 +268,19 @@ async loadWeights(): Promise<void> {
     const matmul2 = matmul;
 
     for (const [name, src] of [
-      ["matMul",    matmul],
-      ["addBias",   addBias],
-      ["gelu",      gelu],
+      ["matMul", matmul],
+      ["addBias", addBias],
+      ["gelu", gelu],
       ["layerNorm", layerNorm],
       ["attnScore", attnScore],
-      ["softmax",   softmax],
-      ["matMul2",   matmul2],
-    ] as [string,string][]) {
+      ["softmax", softmax],
+      ["matMul2", matmul2],
+    ] as [string, string][]) {
       this.programs[name] = this._createProgram(vsrc, src);
     }
   }
 
   private _createProgram(vsSrc: string, fsSrc: string): WebGLProgram {
-    console.log("CREATING PROGRAM")
-
     const gl = this.gl;
     const vs = gl.createShader(gl.VERTEX_SHADER)!;
     gl.shaderSource(vs, vsSrc);
@@ -306,19 +305,21 @@ async loadWeights(): Promise<void> {
     return prog;
   }
 
-  /** 
-   * Create an empty R32F texture, automatically tiling if w*h > maxTex 
+  /**
+   * Create an empty R32F texture of logical size wRaw×hRaw.
+   * If either dimension exceeds maxTex, it tiles into a smaller texture.
    */
   private _createEmptyTex(wRaw: number, hRaw: number): WebGLTexture {
     const gl = this.gl;
     const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
 
-    // total number of floats we need
-    const total = wRaw * hRaw;
-
-    // tile into a texture no larger than maxTex in either dimension
-    const W = Math.min(total, maxTex);
-    const H = Math.ceil(total / W);
+    let W = wRaw;
+    let H = hRaw;
+    if (wRaw > maxTex || hRaw > maxTex) {
+      const total = wRaw * hRaw;
+      W = Math.min(total, maxTex);
+      H = Math.ceil(total / W);
+    }
 
     const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -335,37 +336,35 @@ async loadWeights(): Promise<void> {
     );
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return tex;
   }
 
   private _drawTexture(tex: WebGLTexture) {
     const gl = this.gl;
-    
-    // 1) clear the default framebuffer (your <canvas>)
+
+    // clear the canvas
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-    gl.clearColor(0, 0, 0, 1);            // <-- pick your clear color
+    gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    // 2) bind & configure your display‐shader
+    // draw full-screen quad with display shader
     const prog = this.programs.display;
     gl.useProgram(prog);
-
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
     const pa = gl.getAttribLocation(prog, "a_position");
     gl.enableVertexAttribArray(pa);
     gl.vertexAttribPointer(pa, 2, gl.FLOAT, false, 0, 0);
 
-    // 3) bind the texture you want to show
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, tex);
     const loc = gl.getUniformLocation(prog, "u_tex");
     gl.uniform1i(loc, 0);
 
-    // 4) draw the quad over the entire canvas
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
-
 
   private _runPass(
     name: string,
@@ -412,6 +411,7 @@ async loadWeights(): Promise<void> {
 
     gl.viewport(0, 0, W, H);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
@@ -429,9 +429,23 @@ async loadWeights(): Promise<void> {
           this.weightArrays["wpe"][i * this.nEmbeds + d];
       }
     }
-    const texX = this.gl.createTexture()!;
+    const texX = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, texX);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, L, this.nEmbeds, 0, gl.RED, gl.FLOAT, emb);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.R32F,
+      L,
+      this.nEmbeds,
+      0,
+      gl.RED,
+      gl.FLOAT,
+      emb
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     let cur = texX;
     for (let layer = 0; layer < this.nLayers; layer++) {
@@ -467,13 +481,20 @@ async loadWeights(): Promise<void> {
       this.vocabSize
     );
 
-    // Draw
+    // Draw final logits texture to screen
     this._drawTexture(lg2);
 
+    // read back logits for sampling
     const out = new Float32Array(this.vocabSize);
     const fb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lg2, 0);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      lg2,
+      0
+    );
     gl.readPixels(0, 0, 1, this.vocabSize, gl.RED, gl.FLOAT, out);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
@@ -512,27 +533,23 @@ async loadWeights(): Promise<void> {
   ) {
     let ids = Array.from(this.tokenizer.encode(prompt));
 
-    // give the browser a chance to repaint your disabled-enabling of buttons
-    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    // allow UI to repaint before token loop
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve())
+    );
 
     while (!shouldStop()) {
-      // 1) do your forward pass
       const logits = await this.forward(ids);
-
-      // 2) compute next token (softmax + greedy sample)
       const probs = this.softmax(logits);
       const nxt = this.sample(probs);
-
-      // 3) stop if we hit the end‐of‐text token
       if (nxt === 50256) break;
-
-      // 4) emit the token
       const tok = this.tokenizer.decode([nxt]);
       onToken(tok);
       ids.push(nxt);
-
-      // 5) yield to the next animation frame so the UI can repaint / process Stop clicks
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      // yield for UI responsiveness
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      );
     }
   }
 }
