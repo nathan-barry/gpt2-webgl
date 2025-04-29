@@ -454,197 +454,230 @@ export class GPT2WebGL {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-private async forward(inputIds: number[]): Promise<Float32Array> {
-  const gl = this.gl;
-  const L = inputIds.length;
-  const nHeads = 12;                       // GPT-2 small default
-  const headDim = this.nEmbeds / nHeads;   // 768/12 = 64
+  private async forward(inputIds: number[]): Promise<Float32Array> {
+    const gl = this.gl;
+    const L = inputIds.length;
+    const nHeads = 12;
+    const headDim = this.nEmbeds / nHeads; // 64
 
-  // 1) Token + position embeddings → CPU array
-  const emb = new Float32Array(L * this.nEmbeds);
-  for (let i = 0; i < L; i++) {
-    const id = inputIds[i];
-    for (let d = 0; d < this.nEmbeds; d++) {
-      emb[i * this.nEmbeds + d] =
-        this.weightArrays["wte"][id * this.nEmbeds + d] +
-        this.weightArrays["wpe"][i * this.nEmbeds + d];
+    // 1) Token + position embeddings → CPU array
+    const emb = new Float32Array(L * this.nEmbeds);
+    for (let i = 0; i < L; i++) {
+      const id = inputIds[i];
+      for (let d = 0; d < this.nEmbeds; d++) {
+        emb[i * this.nEmbeds + d] =
+          this.weightArrays["wte"][id * this.nEmbeds + d] +
+          this.weightArrays["wpe"][i * this.nEmbeds + d];
+      }
     }
-  }
 
-  // 2) Upload embeddings as a texture
-  const texX = gl.createTexture()!;
-  gl.bindTexture(gl.TEXTURE_2D, texX);
-  gl.texImage2D(
-    gl.TEXTURE_2D, 0, gl.R32F,
-    L, this.nEmbeds, 0,
-    gl.RED, gl.FLOAT,
-    emb
-  );
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // 2) Upload embeddings as a texture (width=features, height=seq)
+    const texX = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, texX);
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.R32F,
+      this.nEmbeds, L, 0,     // ← swapped
+      gl.RED, gl.FLOAT,
+      emb
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-  let cur = texX;
+    let cur = texX;
 
-  // --- Per‐layer transformer ---
-  for (let layer = 0; layer < this.nLayers; layer++) {
-    // 3) First LayerNorm
-    const norm1 = this._createEmptyTex(L, this.nEmbeds);
+    for (let layer = 0; layer < this.nLayers; layer++) {
+      // 3) First LayerNorm → [features × seq]
+      const norm1 = this._createEmptyTex(this.nEmbeds, L);
+      this._runPass(
+        "layerNorm",
+        {
+          u_X:      cur,
+          u_gamma: this.textures[`ln_1_g_${layer}`],
+          u_beta:  this.textures[`ln_1_b_${layer}`],
+        },
+        { u_N: this.nEmbeds },
+        norm1,
+        this.nEmbeds, L      // ← swapped
+      );
+
+      // 4) Q/K/V projections + bias → all [features × seq]
+      const Q  = this._createEmptyTex(this.nEmbeds, L);
+      const Qb = this._createEmptyTex(this.nEmbeds, L);
+      this._runPass(
+        "matMul",
+        { u_A: norm1, u_B: this.textures[`c_attn_q_w_${layer}`] },
+        { u_K: this.nEmbeds },
+        Q,
+        this.nEmbeds, L
+      );
+      this._runPass(
+        "addBias",
+        { u_X: Q, u_bias: this.textures[`c_attn_q_b_${layer}`] },
+        {},
+        Qb,
+        this.nEmbeds, L
+      );
+
+      const K  = this._createEmptyTex(this.nEmbeds, L);
+      const Kb = this._createEmptyTex(this.nEmbeds, L);
+      this._runPass(
+        "matMul",
+        { u_A: norm1, u_B: this.textures[`c_attn_k_w_${layer}`] },
+        { u_K: this.nEmbeds },
+        K,
+        this.nEmbeds, L
+      );
+      this._runPass(
+        "addBias",
+        { u_X: K, u_bias: this.textures[`c_attn_k_b_${layer}`] },
+        {},
+        Kb,
+        this.nEmbeds, L
+      );
+
+      const V  = this._createEmptyTex(this.nEmbeds, L);
+      const Vb = this._createEmptyTex(this.nEmbeds, L);
+      this._runPass(
+        "matMul",
+        { u_A: norm1, u_B: this.textures[`c_attn_v_w_${layer}`] },
+        { u_K: this.nEmbeds },
+        V,
+        this.nEmbeds, L
+      );
+      this._runPass(
+        "addBias",
+        { u_X: V, u_bias: this.textures[`c_attn_v_b_${layer}`] },
+        {},
+        Vb,
+        this.nEmbeds, L
+      );
+
+      // 5) Multi-head attention: slice → attend → merge
+      const Qheads: WebGLTexture[] = [];
+      const Kheads: WebGLTexture[] = [];
+      const Vheads: WebGLTexture[] = [];
+      for (let h = 0; h < nHeads; ++h) {
+        const off = h * headDim;
+        const Qh = this._createEmptyTex(headDim, L);
+        this._runPass("sliceHead", { u_X: Qb }, { u_headOffset: off }, Qh, headDim, L);
+        Qheads.push(Qh);
+
+        const Kh = this._createEmptyTex(headDim, L);
+        this._runPass("sliceHead", { u_X: Kb }, { u_headOffset: off }, Kh, headDim, L);
+        Kheads.push(Kh);
+
+        const Vh = this._createEmptyTex(headDim, L);
+        this._runPass("sliceHead", { u_X: Vb }, { u_headOffset: off }, Vh, headDim, L);
+        Vheads.push(Vh);
+      }
+
+      const AhHeads: WebGLTexture[] = [];
+      for (let h = 0; h < nHeads; ++h) {
+        // attnScore + softmax → [seq×seq]
+        const S = this._createEmptyTex(L, L);
+        this._runPass("attnScore", { u_Q: Qheads[h], u_K: Kheads[h] }, { u_D: headDim }, S, L, L);
+
+        const P = this._createEmptyTex(L, L);
+        this._runPass("softmax", { u_S: S }, { u_L: L }, P, L, L);
+
+        // P @ Vh → [headDim × seq]
+        const Ah = this._createEmptyTex(headDim, L);
+        this._runPass("matMul", { u_A: P, u_B: Vheads[h] }, { u_K: L }, Ah, headDim, L);
+        AhHeads.push(Ah);
+      }
+
+      // merge heads → [features × seq]
+      const A_merged = this._createEmptyTex(this.nEmbeds, L);
+      const fb = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, A_merged, 0);
+
+      gl.useProgram(this.programs.display);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+      const pa = gl.getAttribLocation(this.programs.display, "a_position");
+      gl.enableVertexAttribArray(pa);
+      gl.vertexAttribPointer(pa, 2, gl.FLOAT, false, 0, 0);
+      const loc = gl.getUniformLocation(this.programs.display, "u_tex");
+
+      for (let h = 0; h < nHeads; ++h) {
+        gl.viewport(h * headDim, 0, headDim, L);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, AhHeads[h]);
+        gl.uniform1i(loc, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+      // 6) Project & bias → [features × seq]
+      const AP  = this._createEmptyTex(this.nEmbeds, L);
+      const APb = this._createEmptyTex(this.nEmbeds, L);
+      this._runPass("matMul", { u_A: A_merged, u_B: this.textures[`c_attn_proj_w_${layer}`] }, { u_K: this.nEmbeds }, AP,  this.nEmbeds, L);
+      this._runPass("addBias", { u_X: AP, u_bias: this.textures[`c_attn_proj_b_${layer}`] }, {},          APb, this.nEmbeds, L);
+
+      // 7) Residual 1: cur = cur + APb
+      const res1 = this._createEmptyTex(this.nEmbeds, L);
+      this._runPass("add", { u_A: cur, u_B: APb }, {}, res1, this.nEmbeds, L);
+
+      // 8) Second LayerNorm → [features × seq]
+      const norm2 = this._createEmptyTex(this.nEmbeds, L);
+      this._runPass(
+        "layerNorm",
+        { u_X: res1, u_gamma: this.textures[`ln_2_g_${layer}`], u_beta: this.textures[`ln_2_b_${layer}`] },
+        { u_N: this.nEmbeds },
+        norm2,
+        this.nEmbeds, L
+      );
+
+      // 9) FFN: up → GELU → down → [features × seq]
+      const fc1  = this._createEmptyTex(4 * this.nEmbeds, L);
+      const fc1b = this._createEmptyTex(4 * this.nEmbeds, L);
+      this._runPass("matMul", { u_A: norm2, u_B: this.textures[`c_fc_w_${layer}`] }, { u_K: this.nEmbeds }, fc1,  4 * this.nEmbeds, L);
+      this._runPass("addBias", { u_X: fc1, u_bias: this.textures[`c_fc_b_${layer}`] }, {},                 fc1b, 4 * this.nEmbeds, L);
+
+      const geluOut = this._createEmptyTex(4 * this.nEmbeds, L);
+      this._runPass("gelu", { u_X: fc1b }, {}, geluOut, 4 * this.nEmbeds, L);
+
+      const fc2  = this._createEmptyTex(this.nEmbeds, L);
+      const fc2b = this._createEmptyTex(this.nEmbeds, L);
+      this._runPass("matMul", { u_A: geluOut, u_B: this.textures[`c_proj_w_${layer}`] }, { u_K: 4 * this.nEmbeds }, fc2,  this.nEmbeds, L);
+      this._runPass("addBias", { u_X: fc2, u_bias: this.textures[`c_proj_b_${layer}`] }, {},             fc2b, this.nEmbeds, L);
+
+      // 10) Residual 2: cur = res1 + fc2b
+      const res2 = this._createEmptyTex(this.nEmbeds, L);
+      this._runPass("add", { u_A: res1, u_B: fc2b }, {}, res2, this.nEmbeds, L);
+
+      cur = res2;
+    }
+
+    // Final LayerNorm → [features × seq]
+    const normF = this._createEmptyTex(this.nEmbeds, L);
     this._runPass(
       "layerNorm",
-      { u_X: cur,   // ← sample the previous activation
-        u_gamma: this.textures[`ln_1_g_${layer}`],
-        u_beta:  this.textures[`ln_1_b_${layer}`]
-      },
+      { u_X: cur, u_gamma: this.textures["ln_f_g"], u_beta: this.textures["ln_f_b"] },
       { u_N: this.nEmbeds },
-      norm1, L, this.nEmbeds
+      normF,
+      this.nEmbeds, L
     );
 
-    // 4) Q, K, V projections + bias
-    const Q  = this._createEmptyTex(L, this.nEmbeds);
-    const Qb = this._createEmptyTex(L, this.nEmbeds);
-    this._runPass("matMul",    { u_A: norm1, u_B: this.textures[`c_attn_q_w_${layer}`] }, { u_K: this.nEmbeds }, Q,  L, this.nEmbeds);
-    this._runPass("addBias",   { u_X: Q,      u_bias: this.textures[`c_attn_q_b_${layer}`] }, {},          Qb, L, this.nEmbeds);
+    // LM‐head: [vocabSize × 1]
+    const lg  = this._createEmptyTex(this.vocabSize, 1);
+    const lg2 = this._createEmptyTex(this.vocabSize, 1);
+    this._runPass("matMul",  { u_A: normF, u_B: this.textures["lm_head_w"] }, { u_K: this.nEmbeds }, lg,  this.vocabSize, 1);
+    this._runPass("addBias", { u_X: lg, u_bias: this.textures["lm_head_b"] }, {},            lg2, this.vocabSize, 1);
 
-    const K  = this._createEmptyTex(L, this.nEmbeds);
-    const Kb = this._createEmptyTex(L, this.nEmbeds);
-    this._runPass("matMul",    { u_A: norm1, u_B: this.textures[`c_attn_k_w_${layer}`] }, { u_K: this.nEmbeds }, K,  L, this.nEmbeds);
-    this._runPass("addBias",   { u_X: K,      u_bias: this.textures[`c_attn_k_b_${layer}`] }, {},          Kb, L, this.nEmbeds);
-
-    const V  = this._createEmptyTex(L, this.nEmbeds);
-    const Vb = this._createEmptyTex(L, this.nEmbeds);
-    this._runPass("matMul",    { u_A: norm1, u_B: this.textures[`c_attn_v_w_${layer}`] }, { u_K: this.nEmbeds }, V,  L, this.nEmbeds);
-    this._runPass("addBias",   { u_X: V,      u_bias: this.textures[`c_attn_v_b_${layer}`] }, {},          Vb, L, this.nEmbeds);
-
-    // 5) Multi‐head attention: slice into heads, attend, then merge
-    const Qheads: WebGLTexture[] = [];
-    const Kheads: WebGLTexture[] = [];
-    const Vheads: WebGLTexture[] = [];
-    for (let h = 0; h < nHeads; ++h) {
-      const offset = h * headDim;
-      const Qh = this._createEmptyTex(L, headDim);
-      this._runPass("sliceHead", { u_X: Qb }, { u_headOffset: offset }, Qh, L, headDim);
-      Qheads.push(Qh);
-
-      const Kh = this._createEmptyTex(L, headDim);
-      this._runPass("sliceHead", { u_X: Kb }, { u_headOffset: offset }, Kh, L, headDim);
-      Kheads.push(Kh);
-
-      const Vh = this._createEmptyTex(L, headDim);
-      this._runPass("sliceHead", { u_X: Vb }, { u_headOffset: offset }, Vh, L, headDim);
-      Vheads.push(Vh);
-    }
-
-    const AhHeads: WebGLTexture[] = [];
-    for (let h = 0; h < nHeads; ++h) {
-      const S = this._createEmptyTex(L, L);
-      this._runPass("attnScore", { u_Q: Qheads[h], u_K: Kheads[h] }, { u_D: headDim }, S, L, L);
-
-      const P = this._createEmptyTex(L, L);
-      this._runPass("softmax",   { u_S: S               }, { u_L: L       }, P, L, L);
-
-      const Ah = this._createEmptyTex(L, headDim);
-      this._runPass("matMul",    { u_A: P, u_B: Vheads[h] }, { u_K: L     }, Ah, L, headDim);
-      AhHeads.push(Ah);
-    }
-
-    // merge the 12 [L×64] heads into one [L×768] texture
-    const A_merged = this._createEmptyTex(L, this.nEmbeds);
-    const fb = gl.createFramebuffer()!;
+    // draw & read back
+    this._drawTexture(lg2);
+    const out = new Float32Array(this.vocabSize);
+    const fb  = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, A_merged, 0);
-
-    gl.useProgram(this.programs.display);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
-    const pa = gl.getAttribLocation(this.programs.display, "a_position");
-    gl.enableVertexAttribArray(pa);
-    gl.vertexAttribPointer(pa, 2, gl.FLOAT, false, 0, 0);
-    const locTex = gl.getUniformLocation(this.programs.display, "u_tex");
-
-    for (let h = 0; h < nHeads; ++h) {
-      gl.viewport(h * headDim, 0, headDim, L);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, AhHeads[h]);
-      gl.uniform1i(locTex, 0);
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
-    }
-
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lg2, 0);
+    gl.readPixels(0, 0, this.vocabSize, 1, gl.RED, gl.FLOAT, out);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-    const A = A_merged;
-
-    // 6) Project & bias
-    const AP  = this._createEmptyTex(L, this.nEmbeds);
-    const APb = this._createEmptyTex(L, this.nEmbeds);
-    this._runPass("matMul",  { u_A: A,  u_B: this.textures[`c_attn_proj_w_${layer}`] }, { u_K: this.nEmbeds }, AP,  L, this.nEmbeds);
-    this._runPass("addBias", { u_X: AP, u_bias: this.textures[`c_attn_proj_b_${layer}`] }, {},              APb, L, this.nEmbeds);
-
-    // 7) Residual 1
-    const res1 = this._createEmptyTex(L, this.nEmbeds);
-    this._runPass("add", { u_A: cur, u_B: APb }, {}, res1, L, this.nEmbeds);
-
-    // 8) Second LayerNorm
-    const norm2 = this._createEmptyTex(L, this.nEmbeds);
-    this._runPass(
-      "layerNorm",
-      { u_X: res1,  // ← sample the output of the first residual
-        u_gamma: this.textures[`ln_2_g_${layer}`],
-        u_beta:  this.textures[`ln_2_b_${layer}`]
-      },
-      { u_N: this.nEmbeds },
-      norm2, L, this.nEmbeds
-    );
-
-    // 9) Feed-forward sublayer
-    const fc1  = this._createEmptyTex(L, 4 * this.nEmbeds);
-    const fc1b = this._createEmptyTex(L, 4 * this.nEmbeds);
-    this._runPass("matMul",  { u_A: norm2, u_B: this.textures[`c_fc_w_${layer}`] }, { u_K: this.nEmbeds }, fc1,  L, 4 * this.nEmbeds);
-    this._runPass("addBias", { u_X: fc1,     u_bias: this.textures[`c_fc_b_${layer}`] }, {},              fc1b, L, 4 * this.nEmbeds);
-
-    const geluOut = this._createEmptyTex(L, 4 * this.nEmbeds);
-    this._runPass("gelu", { u_X: fc1b }, {}, geluOut, L, 4 * this.nEmbeds);
-
-    const fc2  = this._createEmptyTex(L, this.nEmbeds);
-    const fc2b = this._createEmptyTex(L, this.nEmbeds);
-    this._runPass("matMul",  { u_A: geluOut, u_B: this.textures[`c_proj_w_${layer}`] }, { u_K: 4 * this.nEmbeds }, fc2,  L, this.nEmbeds);
-    this._runPass("addBias", { u_X: fc2,      u_bias: this.textures[`c_proj_b_${layer}`] }, {},                   fc2b, L, this.nEmbeds);
-
-    // 10) Residual 2
-    const res2 = this._createEmptyTex(L, this.nEmbeds);
-    this._runPass("add", { u_A: res1, u_B: fc2b }, {}, res2, L, this.nEmbeds);
-
-    cur = res2;
+    return out;
   }
-
-  // --- Final layer norm + LM head ---
-  const normF = this._createEmptyTex(L, this.nEmbeds);
-  this._runPass(
-    "layerNorm",
-    { u_X: cur,   // ← sample the last layer’s output
-      u_gamma: this.textures["ln_f_g"],
-      u_beta:  this.textures["ln_f_b"]
-    },
-    { u_N: this.nEmbeds },
-    normF, L, this.nEmbeds
-  );
-
-  const lg  = this._createEmptyTex(1, this.vocabSize);
-  const lg2 = this._createEmptyTex(1, this.vocabSize);
-  this._runPass("matMul",  { u_A: normF, u_B: this.textures["lm_head_w"] }, { u_K: this.nEmbeds }, lg,  1, this.vocabSize);
-  this._runPass("addBias", { u_X: lg,     u_bias: this.textures["lm_head_b"] }, {},              lg2, 1, this.vocabSize);
-
-  // Draw and read back logits
-  this._drawTexture(lg2);
-  const out = new Float32Array(this.vocabSize);
-  const fb  = gl.createFramebuffer()!;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lg2, 0);
-  gl.readPixels(0, 0, 1, this.vocabSize, gl.RED, gl.FLOAT, out);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-  return out;
-}
 
 
   private softmax(x: Float32Array) {
