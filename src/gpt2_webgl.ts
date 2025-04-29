@@ -78,50 +78,63 @@ export class GPT2WebGL {
     this.programs.display = this._createProgram(vsrc, fsrc);
   }
 
-  /** Load all weights as float32 textures */
-  async loadWeights(): Promise<void> {
-    const gl = this.gl;
-    const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+/** Load all weights as float32 textures */
+async loadWeights(): Promise<void> {
+  console.log("LOADING WEIGHTS");
 
-    for (const name in this.manifest) {
-      const url = this.manifest[name];
-      const res = await fetch(url);
-      const buf = await res.arrayBuffer();
-      const arr = new Float32Array(buf);
-      this.weightArrays[name] = arr;
+  const gl = this.gl;
+  const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
 
-      // determine dims
-      let W: number, H: number;
-      if (name === "lm_head_w") {
-        W = this.nEmbeds;
-        H = this.vocabSize;
-      } else if (name.startsWith("c_attn") || name.startsWith("c_fc")) {
-        W = this.nEmbeds;
-        H = this.nEmbeds;
-      } else {
-        W = Math.min(arr.length, maxTex);
-        H = Math.ceil(arr.length / W);
-      }
-      this.tileInfo[name] = { width: W, height: H };
+  for (const name in this.manifest) {
+    const url = this.manifest[name];
+    const res = await fetch(url);
+    const buf = await res.arrayBuffer();
+    const arr = new Float32Array(buf);
+    this.weightArrays[name] = arr;
 
-      const tex = gl.createTexture()!;
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.R32F,
-        W,
-        H,
-        0,
-        gl.RED,
-        gl.FLOAT,
-        arr
-      );
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      this.textures[name] = tex;
+    // determine dims: only keep the 768×768 shortcut for c_attn/c_fc
+    let W: number, H: number;
+    if (name.startsWith("c_attn") || name.startsWith("c_fc")) {
+      W = this.nEmbeds;
+      H = this.nEmbeds;
+    } else {
+      // generic tiling for everything else (including lm_head_w):
+      const total = arr.length;
+      W = Math.min(total, maxTex);
+      H = Math.ceil(total / W);
     }
+    this.tileInfo[name] = { width: W, height: H };
+
+    // pad to W*H if needed
+    const needed = W * H;
+    const uploadData =
+      arr.length === needed
+        ? arr
+        : (() => {
+            const tmp = new Float32Array(needed);
+            tmp.set(arr, 0);
+            return tmp;
+          })();
+
+    // upload GPU texture
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.R32F,
+      W,
+      H,
+      0,
+      gl.RED,
+      gl.FLOAT,
+      uploadData
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    this.textures[name] = tex;
   }
+}
 
   /** Compile & link all our little passes */
   private _initShaders() {
@@ -259,6 +272,8 @@ export class GPT2WebGL {
   }
 
   private _createProgram(vsSrc: string, fsSrc: string): WebGLProgram {
+    console.log("CREATING PROGRAM")
+
     const gl = this.gl;
     const vs = gl.createShader(gl.VERTEX_SHADER)!;
     gl.shaderSource(vs, vsSrc);
@@ -283,15 +298,36 @@ export class GPT2WebGL {
     return prog;
   }
 
-  /** Create an empty R32F texture */
-  private _createEmptyTex(w: number, h: number): WebGLTexture {
+  /** 
+   * Create an empty R32F texture, automatically tiling if w*h > maxTex 
+   */
+  private _createEmptyTex(wRaw: number, hRaw: number): WebGLTexture {
     const gl = this.gl;
-    const t = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_2D, t);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, h, 0, gl.RED, gl.FLOAT, null);
+    const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+
+    // total number of floats we need
+    const total = wRaw * hRaw;
+
+    // tile into a texture no larger than maxTex in either dimension
+    const W = Math.min(total, maxTex);
+    const H = Math.ceil(total / W);
+
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.R32F,
+      W,
+      H,
+      0,
+      gl.RED,
+      gl.FLOAT,
+      null
+    );
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    return t;
+    return tex;
   }
 
   private _runPass(
@@ -429,16 +465,34 @@ export class GPT2WebGL {
     return idx;
   }
 
-  async generate(prompt: string, onToken: (t: string) => void, shouldStop: () => boolean) {
+  async generate(
+    prompt: string,
+    onToken: (t: string) => void,
+    shouldStop: () => boolean
+  ) {
     let ids = Array.from(this.tokenizer.encode(prompt));
+
+    // give the browser a chance to repaint your disabled-enabling of buttons
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
     while (!shouldStop()) {
+      // 1) do your forward pass
       const logits = await this.forward(ids);
+
+      // 2) compute next token (softmax + greedy sample)
       const probs = this.softmax(logits);
       const nxt = this.sample(probs);
+
+      // 3) stop if we hit the end‐of‐text token
       if (nxt === 50256) break;
+
+      // 4) emit the token
       const tok = this.tokenizer.decode([nxt]);
       onToken(tok);
       ids.push(nxt);
+
+      // 5) yield to the next animation frame so the UI can repaint / process Stop clicks
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     }
   }
 }

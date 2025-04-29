@@ -17,6 +17,7 @@ import { GPT2WebGL } from "./gpt2_webgl";
 
   let stopping = false;
   startB.onclick = () => {
+    console.log("CLICKED START")
     stopping = false;
     startB.disabled = true;
     stopB.disabled  = false;
@@ -29,5 +30,10 @@ import { GPT2WebGL } from "./gpt2_webgl";
       stopB.disabled  = true;
     });
   };
-  stopB.onclick = () => stopping = true;
+  stopB.onclick = () => {
+    console.log("CLICKED STOP")
+    stopping = true;
+    stopB.disabled = true;
+    startB.disabled  = false;
+  }
 })();
