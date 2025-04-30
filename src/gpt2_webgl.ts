@@ -694,6 +694,7 @@ export class GPT2WebGL {
   }
 
   private sample(probs: Float32Array) {
+    // max
     let m = 0,
       idx = 0;
     for (let i = 0; i < probs.length; i++) {
@@ -704,7 +705,7 @@ export class GPT2WebGL {
     }
     return idx;
 
-    // stochastic
+    // // stochastic
     // const r = Math.random();
     // let cum = 0;
     // for (let i = 0; i < probs.length; i++) {

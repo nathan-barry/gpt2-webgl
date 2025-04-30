@@ -20,7 +20,7 @@ manifest = {}
 def save(name: str, arr: np.ndarray):
     path = os.path.join(out_dir, f"{name}.bin")
     arr.astype(np.float32).tofile(path)
-    manifest[name] = f"/{out_dir}/{name}.bin"
+    manifest[name] = f"/{out_dir[7:]}/{name}.bin" # subscript gets rid of warning later on
     print(f"→ {path}  shape={arr.shape}")
 
 # 3) embeddings
