@@ -1,5 +1,7 @@
 import { encodingForModel, Tiktoken } from "js-tiktoken";
 
+const DEBUG_LAYER = 0;
+
 interface WeightManifest {
   [key: string]: string;
 }
@@ -568,7 +570,7 @@ export class GPT2WebGL {
     let cur = texX;
 
     for (let layer = 0; layer < this.nLayers; layer++) {
-      if (layer === 0) {
+      if (layer === DEBUG_LAYER) {
         this.debugPrint(`Block 0 — input x`, cur, this.nEmbeds, L);
       }
 
@@ -585,7 +587,7 @@ export class GPT2WebGL {
         norm1,
         this.nEmbeds, L      // ← swapped
       );
-      if (layer === 0) {
+      if (layer === DEBUG_LAYER) {
         this.debugPrint(`Block ${layer} — LayerNorm 1`, norm1, this.nEmbeds, L);
       }
 
@@ -641,7 +643,7 @@ export class GPT2WebGL {
         Vb,
         this.nEmbeds, L
       );
-      if (layer === 0) {
+      if (layer === DEBUG_LAYER) {
         this.debugPrint("Block 0 — Q", Qb, this.nEmbeds, L);
         this.debugPrint("Block 0 — K", Kb, this.nEmbeds, L);
         this.debugPrint("Block 0 — V", Vb, this.nEmbeds, L);
@@ -680,7 +682,7 @@ export class GPT2WebGL {
         const Ah = this._createEmptyTex(headDim, L);
         this._runPass("matMul", { u_A: P, u_B: Vheads[h] }, { u_K: L }, Ah, headDim, L);
 
-        if (layer === 0 && h === 0) {
+        if (layer === DEBUG_LAYER && h === 0) {
           this.debugPrint(`Block 0 — head 0 scores`, S, L, L);
           this.debugPrint(`Block 0 — head 0 probs`, P, L, L);
           this.debugPrint(`Block 0 — head 0 output`, Ah, headDim, L);
@@ -711,7 +713,7 @@ export class GPT2WebGL {
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-      if (layer === 0) {
+      if (layer === DEBUG_LAYER) {
         this.debugPrint(`Block 0 — merged heads`, A_merged, this.nEmbeds, L);
       }
 
@@ -720,16 +722,10 @@ export class GPT2WebGL {
       const APb = this._createEmptyTex(this.nEmbeds, L);
       this._runPass("matMul", { u_A: A_merged, u_B: this.textures[`c_proj_w_${layer}`] }, { u_K: this.nEmbeds }, AP,  this.nEmbeds, L);
       this._runPass("addBias", { u_X: AP, u_bias: this.textures[`c_proj_b_${layer}`] }, {},          APb, this.nEmbeds, L);
-      if (layer === 0) {
-        this.debugPrint(`Block 0 — projection output`, APb, this.nEmbeds, L);
-      }
 
       // 7) Residual 1: cur = cur + APb
       const res1 = this._createEmptyTex(this.nEmbeds, L);
       this._runPass("add", { u_A: cur, u_B: APb }, {}, res1, this.nEmbeds, L);
-      if (layer === 0) {
-        this.debugPrint(`Block 0 — post-attention + residual`, res1, this.nEmbeds, L);
-      }
 
       // 8) Second LayerNorm → [features × seq]
       const norm2 = this._createEmptyTex(this.nEmbeds, L);
@@ -740,7 +736,7 @@ export class GPT2WebGL {
         norm2,
         this.nEmbeds, L
       );
-      if (layer === 0) {
+      if (layer === DEBUG_LAYER) {
         this.debugPrint(`Block ${layer} — LayerNorm 2`, norm2, this.nEmbeds, L);
       }
 
@@ -752,7 +748,7 @@ export class GPT2WebGL {
 
       const geluOut = this._createEmptyTex(4 * this.nEmbeds, L);
       this._runPass("gelu", { u_X: fc1b }, {}, geluOut, 4 * this.nEmbeds, L);
-      if (layer === 0) {
+      if (layer === DEBUG_LAYER) {
         this.debugPrint(`Block ${layer} — FFN intermediate`, geluOut, 4 * this.nEmbeds, L);
       }
 
@@ -760,14 +756,14 @@ export class GPT2WebGL {
       const fc2b = this._createEmptyTex(this.nEmbeds, L);
       this._runPass("matMul", { u_A: geluOut, u_B: this.textures[`mlp_proj_w_${layer}`] }, { u_K: 4 * this.nEmbeds }, fc2,  this.nEmbeds, L);
       this._runPass("addBias", { u_X: fc2, u_bias: this.textures[`mlp_proj_b_${layer}`] }, {},             fc2b, this.nEmbeds, L);
-      if (layer === 0) {
+      if (layer === DEBUG_LAYER) {
         this.debugPrint(`Block ${layer} — FFN output`, fc2b, this.nEmbeds, L);
       }
 
       // 10) Residual 2: cur = res1 + fc2b
       const res2 = this._createEmptyTex(this.nEmbeds, L);
       this._runPass("add", { u_A: res1, u_B: fc2b }, {}, res2, this.nEmbeds, L);
-      if (layer === 0) {
+      if (layer === DEBUG_LAYER) {
         this.debugPrint(`Block ${layer} — Block output`, res2, this.nEmbeds, L);
       }
 
