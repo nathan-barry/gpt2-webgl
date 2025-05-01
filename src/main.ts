@@ -1,5 +1,7 @@
 import { GPT2WebGL } from "./gpt2_webgl";
 
+const PRINT_OUTPUT = true;
+
 (async () => {
   const canvas = document.getElementById("glcanvas") as HTMLCanvasElement;
   const input  = document.getElementById("inputText") as HTMLTextAreaElement;
@@ -25,7 +27,9 @@ import { GPT2WebGL } from "./gpt2_webgl";
       input.value,
       tok => {
         input.value += tok;
-        console.log(input.value);
+        if (PRINT_OUTPUT) {
+            console.log(input.value);
+        }
       },
       () => stopping
     ).then(() => {

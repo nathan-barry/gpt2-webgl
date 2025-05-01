@@ -1,6 +1,6 @@
 import { encodingForModel, Tiktoken } from "js-tiktoken";
 
-const DEBUG_LAYER = 11;
+const DEBUG_LAYER = -1;
 
 interface WeightManifest {
   [key: string]: string;
@@ -813,7 +813,9 @@ this.gl = gl;
 
       cur = res2;
     }
-    this.debugPrint(`All layers output`, cur, this.nEmbeds, L);
+    if (DEBUG_LAYER !== -1) {
+        this.debugPrint(`All layers output`, cur, this.nEmbeds, L);
+    }
 
     // Final LayerNorm → [features × seq]
     const normF = this._createEmptyTex(this.nEmbeds, L);
@@ -824,7 +826,9 @@ this.gl = gl;
       normF,
       this.nEmbeds, L
     );
-    this.debugPrint(`Final layer norm output`, normF, this.nEmbeds, L);
+    if (DEBUG_LAYER !== -1) {
+        this.debugPrint(`Final layer norm output`, normF, this.nEmbeds, L);
+    }
 
     // compute output‐tile dims
     const V   = this.vocabSize;
@@ -850,7 +854,9 @@ this.gl = gl;
       lg,
       Wlg, Hlg
     );
-    this.debugPrint(`LM-head output`, lg, Wlg, Hlg);
+    if (DEBUG_LAYER !== -1) {
+        this.debugPrint(`LM-head output`, lg, Wlg, Hlg);
+    }
 
     const raw = this._readTex(lg, Wlg, Hlg);
     const logits = new Float32Array(V);
