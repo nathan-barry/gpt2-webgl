@@ -29,16 +29,27 @@ const PRINT_OUTPUT = true;
     layerContainer.appendChild(c);
     model.registerLayerCanvas(i, c);
   }
-  const attentionContainer = document.getElementById("attentionCanvases")!;
+  const firstAttentionContainer = document.getElementById("firstAttentionCanvases")!;
   for (let i = 0; i < model.nHeads; i++) {
     const c = document.createElement("canvas");
     c.id     = `attnHead${i}`;
     c.width  = gridSize * blockSize;  // 112
     c.height = gridSize * blockSize;  // 112
     c.style.border = "1px solid #ccc";
-    attentionContainer.appendChild(c);
-    model.registerAttentionCanvas(i, c);
+    firstAttentionContainer.appendChild(c);
+    model.registerFirstAttentionCanvas(i, c);
   }
+  const lastAttentionContainer = document.getElementById("lastAttentionCanvases")!;
+  for (let i = 0; i < model.nHeads; i++) {
+    const c = document.createElement("canvas");
+    c.id     = `attnHead${i}`;
+    c.width  = gridSize * blockSize;  // 112
+    c.height = gridSize * blockSize;  // 112
+    c.style.border = "1px solid #ccc";
+    lastAttentionContainer.appendChild(c);
+    model.registerLastAttentionCanvas(i, c);
+  }
+
 
   let stopping = false;
   startB.onclick = () => {

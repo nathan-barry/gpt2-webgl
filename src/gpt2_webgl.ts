@@ -1,6 +1,7 @@
 import { encodingForModel, Tiktoken } from "js-tiktoken";
 
 const DEBUG_LAYER = -1;
+const DISPLAY_LAYER = 0
 
 interface WeightManifest {
   [key: string]: string;
@@ -23,7 +24,8 @@ export class GPT2WebGL {
 
   // will hold a 2D canvas per layer
   private layerCanvases: HTMLCanvasElement[] = [];
-  private attentionCanvases: HTMLCanvasElement[] = [];
+  private firstAttentionCanvases: HTMLCanvasElement[] = [];
+  private lastAttentionCanvases: HTMLCanvasElement[] = [];
 
   // tiling params per weight
   private tileInfo: { [name: string]: { width: number; height: number } } = {};
@@ -59,13 +61,15 @@ export class GPT2WebGL {
     this._initQuad();
   }
 
-  /** call this from main.ts to attach a canvas to a given layer index */
+  /** call this from main.ts to attach a canvas*/
   public registerLayerCanvas(layer: number, canvas: HTMLCanvasElement) {
     this.layerCanvases[layer] = canvas;
   }
-  /** Called from main.ts to attach a canvas per head */
-  public registerAttentionCanvas(head: number, canvas: HTMLCanvasElement) {
-    this.attentionCanvases[head] = canvas;
+  public registerFirstAttentionCanvas(head: number, canvas: HTMLCanvasElement) {
+    this.firstAttentionCanvases[head] = canvas;
+  }
+  public registerLastAttentionCanvas(head: number, canvas: HTMLCanvasElement) {
+    this.lastAttentionCanvases[head] = canvas;
   }
 
 
@@ -710,8 +714,11 @@ export class GPT2WebGL {
         const P = this._createEmptyTex(L, L);
         this._runPass("softmax", { u_S: S }, { u_L: L }, P, L, L);
 
-        if (this.attentionCanvases[h]) {
-          this._drawAttentionHead(h, P, L);
+        if (this.firstAttentionCanvases[h] && layer === 0) {
+          this._drawAttentionHead(h, P, L, true);
+        }
+        if (this.firstAttentionCanvases[h] && layer === 11) {
+          this._drawAttentionHead(h, P, L, false);
         }
 
         // P @ Vh → [headDim × seq]
@@ -920,7 +927,8 @@ private _drawLayerToCanvas(
 private _drawAttentionHead(
   head: number,
   tex: WebGLTexture,
-  seqLen: number
+  seqLen: number,
+  first: boolean
 ) {
   // how many tokens to display
   const windowSize = 28;
@@ -933,7 +941,7 @@ private _drawAttentionHead(
   const start = Math.max(0, seqLen - windowSize);
 
   // grab & clear the canvas
-  const canvas = this.attentionCanvases[head]!;
+  const canvas = first ? this.firstAttentionCanvases[head]! : this.lastAttentionCanvases[head]!;
   const ctx    = canvas.getContext("2d")!;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
