@@ -240,16 +240,23 @@ export class GPT2WebGL {
       precision highp float;
       uniform sampler2D u_Q, u_K;
       uniform int u_D;
-      in vec2 v_uv; out vec4 o;
+      in vec2 v_uv;
+      out vec4 o;
       void main(){
         ivec2 c = ivec2(gl_FragCoord.xy);
-        int i = c.y, j = c.x;
-        float s = 0.0;
-        for(int d=0; d<u_D; ++d){
-          s += texelFetch(u_Q, ivec2(d,i),0).r 
-            * texelFetch(u_K, ivec2(d,j),0).r;
+        int i = c.y;
+        int j = c.x;
+        float sum = 0.0;
+        for(int d = 0; d < u_D; ++d){
+          sum += texelFetch(u_Q, ivec2(d, i), 0).r
+               * texelFetch(u_K, ivec2(d, j), 0).r;
         }
-        o = vec4(s / sqrt(float(u_D)),0,0,1);
+        float score = sum / sqrt(float(u_D));
+        // --- causal mask: forbid attending to future tokens ---
+        if (j > i) {
+          score += -1e10;  
+        }
+        o = vec4(score, 0, 0, 1);
       }`;
 
     // softmax
@@ -405,6 +412,73 @@ export class GPT2WebGL {
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
+  /**
+   * Read back an R32F texture of size W×H into a Float32Array.
+   */
+  private _readTex(tex: WebGLTexture, W: number, H: number): Float32Array {
+    const gl = this.gl;
+    const fb = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+
+    const out = new Float32Array(W * H);
+    gl.readPixels(0, 0, W, H, gl.RED, gl.FLOAT, out);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(fb);
+    return out;
+  }
+
+  /**
+   * Pretty-print a texture by showing a small “window”:
+   * first 3 rows, …, last 3 rows; and in each row
+   * first 3 columns, …, last 3 columns.
+   */
+  private debugPrint(stage: string, tex: WebGLTexture, W: number, H: number) {
+    const data = this._readTex(tex, W, H);
+    console.group(stage);
+    console.log(`shape = [${H} × ${W}]`);
+    
+    const topRows = 3;
+    const botRows = 3;
+    const printAllRows = H <= topRows + botRows;
+
+    const printRow = (r: number) => {
+      const vals: string[] = [];
+      if (W <= 6) {
+        for (let c = 0; c < W; c++) {
+          vals.push(data[r * W + c].toFixed(4));
+        }
+      } else {
+        // first 3 cols
+        for (let c = 0; c < 3; c++) {
+          vals.push(data[r * W + c].toFixed(4));
+        }
+        vals.push("…");
+        // last 3 cols
+        for (let c = W - 3; c < W; c++) {
+          vals.push(data[r * W + c].toFixed(4));
+        }
+      }
+      console.log(vals.join(" "));
+    };
+
+    // print top rows
+    for (let r = 0; r < (printAllRows ? H : topRows); r++) {
+      printRow(r);
+    }
+
+    // if too many rows, elide middle
+    if (!printAllRows) {
+      console.log("…");
+      for (let r = H - botRows; r < H; r++) {
+        printRow(r);
+      }
+    }
+
+    console.groupEnd();
+  }
+
   private _runPass(
     name: string,
     inputs: { [u: string]: WebGLTexture },
@@ -488,6 +562,10 @@ export class GPT2WebGL {
     let cur = texX;
 
     for (let layer = 0; layer < this.nLayers; layer++) {
+      if (layer === 0) {
+        this.debugPrint(`Block 0 — input x`, cur, this.nEmbeds, L);
+      }
+
       // 3) First LayerNorm → [features × seq]
       const norm1 = this._createEmptyTex(this.nEmbeds, L);
       this._runPass(
@@ -501,6 +579,9 @@ export class GPT2WebGL {
         norm1,
         this.nEmbeds, L      // ← swapped
       );
+      if (layer === 0) {
+        this.debugPrint(`Block ${layer} — LayerNorm 1`, norm1, this.nEmbeds, L);
+      }
 
       // 4) Q/K/V projections + bias → all [features × seq]
       const Q  = this._createEmptyTex(this.nEmbeds, L);
@@ -512,6 +593,7 @@ export class GPT2WebGL {
         Q,
         this.nEmbeds, L
       );
+
       this._runPass(
         "addBias",
         { u_X: Q, u_bias: this.textures[`c_attn_q_b_${layer}`] },
@@ -553,6 +635,19 @@ export class GPT2WebGL {
         Vb,
         this.nEmbeds, L
       );
+      if (layer === 0) {
+        // print the "raw" matMul result
+        this.debugPrint("Block 0 — Q (pre-bias)", Q, this.nEmbeds, L);
+        // print after adding bias
+        this.debugPrint("Block 0 — Q (post-bias)", Qb, this.nEmbeds, L);
+
+        this.debugPrint("Block 0 — K (pre-bias)", K, this.nEmbeds, L);
+        this.debugPrint("Block 0 — K (post-bias)", Kb, this.nEmbeds, L);
+
+        this.debugPrint("Block 0 — V (pre-bias)", V, this.nEmbeds, L);
+        this.debugPrint("Block 0 — V (post-bias)", Vb, this.nEmbeds, L);
+      }
+
 
       // 5) Multi-head attention: slice → attend → merge
       const Qheads: WebGLTexture[] = [];
@@ -585,6 +680,13 @@ export class GPT2WebGL {
         // P @ Vh → [headDim × seq]
         const Ah = this._createEmptyTex(headDim, L);
         this._runPass("matMul", { u_A: P, u_B: Vheads[h] }, { u_K: L }, Ah, headDim, L);
+
+        if (layer === 0 && h === 0) {
+          this.debugPrint(`Block 0 — head 0 scores`, S, L, L);
+          this.debugPrint(`Block 0 — head 0 probs`, P, L, L);
+          this.debugPrint(`Block 0 — head 0 output`, Ah, headDim, L);
+        }
+
         AhHeads.push(Ah);
       }
 
@@ -610,15 +712,25 @@ export class GPT2WebGL {
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
+      if (layer === 0) {
+        this.debugPrint(`Block 0 — merged heads`, A_merged, this.nEmbeds, L);
+      }
+
       // 6) Project & bias → [features × seq]
       const AP  = this._createEmptyTex(this.nEmbeds, L);
       const APb = this._createEmptyTex(this.nEmbeds, L);
       this._runPass("matMul", { u_A: A_merged, u_B: this.textures[`c_attn_proj_w_${layer}`] }, { u_K: this.nEmbeds }, AP,  this.nEmbeds, L);
       this._runPass("addBias", { u_X: AP, u_bias: this.textures[`c_attn_proj_b_${layer}`] }, {},          APb, this.nEmbeds, L);
+      if (layer === 0) {
+        this.debugPrint(`Block 0 — projection output`, APb, this.nEmbeds, L);
+      }
 
       // 7) Residual 1: cur = cur + APb
       const res1 = this._createEmptyTex(this.nEmbeds, L);
       this._runPass("add", { u_A: cur, u_B: APb }, {}, res1, this.nEmbeds, L);
+      if (layer === 0) {
+        this.debugPrint(`Block 0 — post-attention + residual`, res1, this.nEmbeds, L);
+      }
 
       // 8) Second LayerNorm → [features × seq]
       const norm2 = this._createEmptyTex(this.nEmbeds, L);
@@ -629,6 +741,9 @@ export class GPT2WebGL {
         norm2,
         this.nEmbeds, L
       );
+      if (layer === 0) {
+        this.debugPrint(`Block ${layer} — LayerNorm 2`, norm2, this.nEmbeds, L);
+      }
 
       // 9) FFN: up → GELU → down → [features × seq]
       const fc1  = this._createEmptyTex(4 * this.nEmbeds, L);
