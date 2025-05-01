@@ -306,6 +306,43 @@ export class GPT2WebGL {
     `;
     this.programs["add"] = this._createProgram(vsrc, add);
 
+    // after your matmul / add / etc.
+    // display‐vertex shader stays the same (vsrc)
+    const lmHeadFS = `#version 300 es
+      precision highp float;
+      // hidden vector: [N × 1]
+      uniform sampler2D u_X;
+      // lm_head_w tiled: [M_w × H_w]
+      uniform sampler2D u_W;
+      // uniforms:
+      uniform int u_N;    // hiddenSize
+      uniform int u_M;    // weight‐tile width (M_w)
+      uniform int u_O;    // output‐tile width (Wlg)
+      uniform int u_V;    // vocabSize
+      in vec2 v_uv;
+      out vec4 o;
+      void main() {
+        int px = int(gl_FragCoord.x);
+        int py = int(gl_FragCoord.y);
+        int v  = py * u_O + px;
+        if (v >= u_V) {
+          o = vec4(0,0,0,1);
+          return;
+        }
+        float sum = 0.0;
+        for (int f = 0; f < u_N; ++f) {
+          float x = texelFetch(u_X, ivec2(f,0), 0).r;
+          // row-major flatten: idx = v*u_N + f
+          int idx = v * u_N + f;
+          int tx = idx % u_M;
+          int ty = idx / u_M;
+          float w = texelFetch(u_W, ivec2(tx,ty), 0).r;
+          sum += x * w;
+        }
+        o = vec4(sum, 0, 0, 1);
+      }`;
+    this.programs["lmHead"] = this._createProgram(vsrc, lmHeadFS);
+
     // split head
     const sliceHeadFS = `#version 300 es
       precision highp float;
@@ -788,21 +825,86 @@ export class GPT2WebGL {
     );
     this.debugPrint(`Final layer norm output`, normF, this.nEmbeds, L);
 
-    // LM‐head: [vocabSize × 1]
-    const lg = this._createEmptyTex(this.vocabSize, 1);
-    this._runPass("matMul",  { u_A: normF, u_B: this.textures["lm_head_w"] }, { u_K: this.nEmbeds }, lg,  this.vocabSize, 1);
-    this.debugPrint(`LM-head output`, lg, this.vocabSize, 1);
 
-    // draw & read back
-    this._drawTexture(lg);
-    const out = new Float32Array(this.vocabSize);
-    const fb  = gl.createFramebuffer()!;
+    // CPU FALLBACK
+
+    const W = this.nEmbeds;
+    const V = this.vocabSize;
+
+    // Read back just the last row (hidden vector at position L-1)
+    const fb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lg, 0);
-    gl.readPixels(0, 0, this.vocabSize, 1, gl.RED, gl.FLOAT, out);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      normF,
+      0
+    );
+    const hidden = new Float32Array(W);
+    // Note: (0, L-1) → width=W, height=1
+    gl.readPixels(
+      0, L - 1,
+      W, 1,
+      gl.RED, gl.FLOAT,
+      hidden
+    );
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(fb);
 
-    return out;
+    // Dot against your flat lm_head_w (shape = [V × W], row-major)
+    const logits = new Float32Array(V);
+    const W_arr = this.weightArrays["lm_head_w"];
+    for (let v = 0; v < V; v++) {
+      let sum = 0;
+      // W_arr is laid out so that
+      //   W_arr[v * W + f] === weight_matrix[v][f]
+      for (let f = 0; f < W; f++) {
+        sum += hidden[f] * W_arr[v * W + f];
+      }
+      logits[v] = sum;
+    }
+
+    return logits;
+
+    // BELOW IS BROKEN
+
+    // // compute output‐tile dims
+    // const V   = this.vocabSize;
+    // const max = this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number;
+    // const Wlg = Math.min(V, max);
+    // const Hlg = Math.ceil(V / Wlg);
+
+    // // allocate the logits texture (still using your existing createEmptyTex)
+    // const lg = this._createEmptyTex(V, 1);
+
+    // // run the new shader:
+    // this._runPass(
+    //   "lmHead",
+    //   { u_X: normF,
+    //     u_W: this.textures["lm_head_w"] },
+    //   { u_N: this.nEmbeds,
+    //     u_M: max,       // weight‐tile width
+    //     u_O: Wlg,       // output‐tile width
+    //     u_V: V          // vocabSize
+    //   },
+    //   lg,
+    //   Wlg, Hlg
+    // );
+    // this.debugPrint(`LM-head output`, lg, Wlg, Hlg);
+
+    // const raw = this._readTex(lg, Wlg, Hlg);
+    // const logits = new Float32Array(V);
+    // for (let v = 0; v < V; v++) {
+    //   const x = v % Wlg;
+    //   const y = Math.floor(v / Wlg);
+    //   logits[v] = raw[y * Wlg + x];
+    // }
+
+    // // draw & read back
+    // this._drawTexture(lg);
+
+    // return logits;
   }
 
 
