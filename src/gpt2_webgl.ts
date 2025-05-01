@@ -1,6 +1,6 @@
 import { encodingForModel, Tiktoken } from "js-tiktoken";
 
-const DEBUG_LAYER = 0;
+const DEBUG_LAYER = 11;
 
 interface WeightManifest {
   [key: string]: string;
@@ -571,7 +571,7 @@ export class GPT2WebGL {
 
     for (let layer = 0; layer < this.nLayers; layer++) {
       if (layer === DEBUG_LAYER) {
-        this.debugPrint(`Block 0 — input x`, cur, this.nEmbeds, L);
+        this.debugPrint(`Block ${layer} — input x`, cur, this.nEmbeds, L);
       }
 
       // 3) First LayerNorm → [features × seq]
@@ -644,9 +644,9 @@ export class GPT2WebGL {
         this.nEmbeds, L
       );
       if (layer === DEBUG_LAYER) {
-        this.debugPrint("Block 0 — Q", Qb, this.nEmbeds, L);
-        this.debugPrint("Block 0 — K", Kb, this.nEmbeds, L);
-        this.debugPrint("Block 0 — V", Vb, this.nEmbeds, L);
+        this.debugPrint(`Block ${layer} — Q`, Qb, this.nEmbeds, L);
+        this.debugPrint(`Block ${layer} — K`, Kb, this.nEmbeds, L);
+        this.debugPrint(`Block ${layer} — V`, Vb, this.nEmbeds, L);
       }
 
 
@@ -683,9 +683,9 @@ export class GPT2WebGL {
         this._runPass("matMul", { u_A: P, u_B: Vheads[h] }, { u_K: L }, Ah, headDim, L);
 
         if (layer === DEBUG_LAYER && h === 0) {
-          this.debugPrint(`Block 0 — head 0 scores`, S, L, L);
-          this.debugPrint(`Block 0 — head 0 probs`, P, L, L);
-          this.debugPrint(`Block 0 — head 0 output`, Ah, headDim, L);
+          this.debugPrint(`Block ${layer} — head 0 scores`, S, L, L);
+          this.debugPrint(`Block ${layer} — head 0 probs`, P, L, L);
+          this.debugPrint(`Block ${layer} — head 0 output`, Ah, headDim, L);
         }
 
         AhHeads.push(Ah);
@@ -714,7 +714,7 @@ export class GPT2WebGL {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
       if (layer === DEBUG_LAYER) {
-        this.debugPrint(`Block 0 — merged heads`, A_merged, this.nEmbeds, L);
+        this.debugPrint(`Block ${layer} — merged heads`, A_merged, this.nEmbeds, L);
       }
 
       // 6) Project & bias → [features × seq]
@@ -722,10 +722,16 @@ export class GPT2WebGL {
       const APb = this._createEmptyTex(this.nEmbeds, L);
       this._runPass("matMul", { u_A: A_merged, u_B: this.textures[`c_proj_w_${layer}`] }, { u_K: this.nEmbeds }, AP,  this.nEmbeds, L);
       this._runPass("addBias", { u_X: AP, u_bias: this.textures[`c_proj_b_${layer}`] }, {},          APb, this.nEmbeds, L);
+      if (layer === DEBUG_LAYER) {
+        this.debugPrint(`Block ${layer} — projection output`, APb, this.nEmbeds, L);
+      }
 
       // 7) Residual 1: cur = cur + APb
       const res1 = this._createEmptyTex(this.nEmbeds, L);
       this._runPass("add", { u_A: cur, u_B: APb }, {}, res1, this.nEmbeds, L);
+      if (layer === DEBUG_LAYER) {
+        this.debugPrint(`Block ${layer} — post-attention + residual`, res1, this.nEmbeds, L);
+      }
 
       // 8) Second LayerNorm → [features × seq]
       const norm2 = this._createEmptyTex(this.nEmbeds, L);
