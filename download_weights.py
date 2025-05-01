@@ -34,8 +34,8 @@ for i in range(model.config.n_layer):
     # c_attn: shape [3*emb, emb]
     c_attn_w = sd[f"{prefix}.attn.c_attn.weight"].cpu()
     c_attn_b = sd[f"{prefix}.attn.c_attn.bias"].cpu()
-    qw, kw, vw = c_attn_w.chunk(3, dim=0)
-    qb, kb, vb = c_attn_b.chunk(3, dim=0)
+    qw, kw, vw = c_attn_w.chunk(3, dim=-1)
+    qb, kb, vb = c_attn_b.chunk(3, dim=-1)
     save(f"c_attn_q_w_{i}", qw.numpy())
     save(f"c_attn_k_w_{i}", kw.numpy())
     save(f"c_attn_v_w_{i}", vw.numpy())

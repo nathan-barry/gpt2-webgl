@@ -96,11 +96,17 @@ export class GPT2WebGL {
       const arr = new Float32Array(buf);
       this.weightArrays[name] = arr;
 
-      // determine dims: only keep the 768×768 shortcut for c_attn
+      // determine dims: only keep the 768×768 shortcut for c_attn and c_proj
       let W: number, H: number;
-      if (name.startsWith("c_attn")) {
+      if (name.startsWith("c_attn") || name.startsWith("c_proj")) {
         W = this.nEmbeds;
         H = this.nEmbeds;
+      } else if (name.startsWith("mlp_fc")) {
+        W = 4 * this.nEmbeds;
+        H = this.nEmbeds;
+      } else if (name.startsWith("mlp_proj")) {
+        W = this.nEmbeds;
+        H = 4 * this.nEmbeds;
       } else {
         // generic tiling for everything else (including lm_head_w):
         const total = arr.length;
@@ -719,8 +725,8 @@ export class GPT2WebGL {
       // 6) Project & bias → [features × seq]
       const AP  = this._createEmptyTex(this.nEmbeds, L);
       const APb = this._createEmptyTex(this.nEmbeds, L);
-      this._runPass("matMul", { u_A: A_merged, u_B: this.textures[`c_attn_proj_w_${layer}`] }, { u_K: this.nEmbeds }, AP,  this.nEmbeds, L);
-      this._runPass("addBias", { u_X: AP, u_bias: this.textures[`c_attn_proj_b_${layer}`] }, {},          APb, this.nEmbeds, L);
+      this._runPass("matMul", { u_A: A_merged, u_B: this.textures[`c_proj_w_${layer}`] }, { u_K: this.nEmbeds }, AP,  this.nEmbeds, L);
+      this._runPass("addBias", { u_X: AP, u_bias: this.textures[`c_proj_b_${layer}`] }, {},          APb, this.nEmbeds, L);
       if (layer === 0) {
         this.debugPrint(`Block 0 — projection output`, APb, this.nEmbeds, L);
       }
@@ -748,23 +754,33 @@ export class GPT2WebGL {
       // 9) FFN: up → GELU → down → [features × seq]
       const fc1  = this._createEmptyTex(4 * this.nEmbeds, L);
       const fc1b = this._createEmptyTex(4 * this.nEmbeds, L);
-      this._runPass("matMul", { u_A: norm2, u_B: this.textures[`c_fc_w_${layer}`] }, { u_K: this.nEmbeds }, fc1,  4 * this.nEmbeds, L);
-      this._runPass("addBias", { u_X: fc1, u_bias: this.textures[`c_fc_b_${layer}`] }, {},                 fc1b, 4 * this.nEmbeds, L);
+      this._runPass("matMul", { u_A: norm2, u_B: this.textures[`mlp_fc_w_${layer}`] }, { u_K: this.nEmbeds }, fc1,  4 * this.nEmbeds, L);
+      this._runPass("addBias", { u_X: fc1, u_bias: this.textures[`mlp_fc_b_${layer}`] }, {},                 fc1b, 4 * this.nEmbeds, L);
 
       const geluOut = this._createEmptyTex(4 * this.nEmbeds, L);
       this._runPass("gelu", { u_X: fc1b }, {}, geluOut, 4 * this.nEmbeds, L);
+      if (layer === 0) {
+        this.debugPrint(`Block ${layer} — FFN intermediate`, geluOut, 4 * this.nEmbeds, L);
+      }
 
       const fc2  = this._createEmptyTex(this.nEmbeds, L);
       const fc2b = this._createEmptyTex(this.nEmbeds, L);
-      this._runPass("matMul", { u_A: geluOut, u_B: this.textures[`c_proj_w_${layer}`] }, { u_K: 4 * this.nEmbeds }, fc2,  this.nEmbeds, L);
-      this._runPass("addBias", { u_X: fc2, u_bias: this.textures[`c_proj_b_${layer}`] }, {},             fc2b, this.nEmbeds, L);
+      this._runPass("matMul", { u_A: geluOut, u_B: this.textures[`mlp_proj_w_${layer}`] }, { u_K: 4 * this.nEmbeds }, fc2,  this.nEmbeds, L);
+      this._runPass("addBias", { u_X: fc2, u_bias: this.textures[`mlp_proj_b_${layer}`] }, {},             fc2b, this.nEmbeds, L);
+      if (layer === 0) {
+        this.debugPrint(`Block ${layer} — FFN output`, fc2b, this.nEmbeds, L);
+      }
 
       // 10) Residual 2: cur = res1 + fc2b
       const res2 = this._createEmptyTex(this.nEmbeds, L);
       this._runPass("add", { u_A: res1, u_B: fc2b }, {}, res2, this.nEmbeds, L);
+      if (layer === 0) {
+        this.debugPrint(`Block ${layer} — Block output`, res2, this.nEmbeds, L);
+      }
 
       cur = res2;
     }
+    this.debugPrint(`All layers output`, cur, this.nEmbeds, L);
 
     // Final LayerNorm → [features × seq]
     const normF = this._createEmptyTex(this.nEmbeds, L);
@@ -775,19 +791,19 @@ export class GPT2WebGL {
       normF,
       this.nEmbeds, L
     );
+    this.debugPrint(`Final layer norm output`, normF, this.nEmbeds, L);
 
     // LM‐head: [vocabSize × 1]
-    const lg  = this._createEmptyTex(this.vocabSize, 1);
-    const lg2 = this._createEmptyTex(this.vocabSize, 1);
+    const lg = this._createEmptyTex(this.vocabSize, 1);
     this._runPass("matMul",  { u_A: normF, u_B: this.textures["lm_head_w"] }, { u_K: this.nEmbeds }, lg,  this.vocabSize, 1);
-    this._runPass("addBias", { u_X: lg, u_bias: this.textures["lm_head_b"] }, {},            lg2, this.vocabSize, 1);
+    this.debugPrint(`LM-head output`, lg, this.vocabSize, 1);
 
     // draw & read back
-    this._drawTexture(lg2);
+    this._drawTexture(lg);
     const out = new Float32Array(this.vocabSize);
     const fb  = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lg2, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, lg, 0);
     gl.readPixels(0, 0, this.vocabSize, 1, gl.RED, gl.FLOAT, out);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
