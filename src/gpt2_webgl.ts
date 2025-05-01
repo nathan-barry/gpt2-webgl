@@ -15,8 +15,15 @@ export class GPT2WebGL {
 
   // Model config
   private nEmbeds = 768;
-  private nLayers = 12;
   private vocabSize = 50257;
+  public nLayers = 12;
+  public nHeads = 12;
+  public nCtx = 1024;
+
+
+  // will hold a 2D canvas per layer
+  private layerCanvases: HTMLCanvasElement[] = [];
+  private attentionCanvases: HTMLCanvasElement[] = [];
 
   // tiling params per weight
   private tileInfo: { [name: string]: { width: number; height: number } } = {};
@@ -37,7 +44,7 @@ export class GPT2WebGL {
         "EXT_color_buffer_float not supported — cannot render to float textures"
       );
     }
-this.gl = gl;
+    this.gl = gl;
     this.manifest = manifest;
 
     const maxTex = this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE);
@@ -51,6 +58,16 @@ this.gl = gl;
     this._initDisplayPass();
     this._initQuad();
   }
+
+  /** call this from main.ts to attach a canvas to a given layer index */
+  public registerLayerCanvas(layer: number, canvas: HTMLCanvasElement) {
+    this.layerCanvases[layer] = canvas;
+  }
+  /** Called from main.ts to attach a canvas per head */
+  public registerAttentionCanvas(head: number, canvas: HTMLCanvasElement) {
+    this.attentionCanvases[head] = canvas;
+  }
+
 
   private _initQuad() {
     const gl = this.gl;
@@ -78,8 +95,10 @@ this.gl = gl;
       uniform sampler2D u_tex;
       out vec4 o;
       void main() {
-        o = texture(u_tex, v_uv);
+        float v = texture(u_tex, v_uv).r;
+        o = vec4(v, v, v, 1);
       }`;
+
     this.programs.display = this._createProgram(vsrc, fsrc);
   }
 
@@ -433,31 +452,6 @@ this.gl = gl;
     return tex;
   }
 
-  private _drawTexture(tex: WebGLTexture) {
-    const gl = this.gl;
-
-    // clear the canvas
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-    gl.clearColor(0, 0, 0, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-
-    // draw full-screen quad with display shader
-    const prog = this.programs.display;
-    gl.useProgram(prog);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
-    const pa = gl.getAttribLocation(prog, "a_position");
-    gl.enableVertexAttribArray(pa);
-    gl.vertexAttribPointer(pa, 2, gl.FLOAT, false, 0, 0);
-
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    const loc = gl.getUniformLocation(prog, "u_tex");
-    gl.uniform1i(loc, 0);
-
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-  }
-
   /**
    * Read back an R32F texture of size W×H into a Float32Array.
    */
@@ -716,6 +710,10 @@ this.gl = gl;
         const P = this._createEmptyTex(L, L);
         this._runPass("softmax", { u_S: S }, { u_L: L }, P, L, L);
 
+        if (this.attentionCanvases[h]) {
+          this._drawAttentionHead(h, P, L);
+        }
+
         // P @ Vh → [headDim × seq]
         const Ah = this._createEmptyTex(headDim, L);
         this._runPass("matMul", { u_A: P, u_B: Vheads[h] }, { u_K: L }, Ah, headDim, L);
@@ -811,6 +809,9 @@ this.gl = gl;
         this.debugPrint(`Block ${layer} — Block output`, res2, this.nEmbeds, L);
       }
 
+      if (this.layerCanvases[layer]) {
+        this._drawLayerToCanvas(layer, res2, this.nEmbeds, L);
+      }
       cur = res2;
     }
     if (DEBUG_LAYER !== -1) {
@@ -866,12 +867,99 @@ this.gl = gl;
       logits[v] = raw[y * Wlg + x];
     }
 
-    // draw & read back
-    this._drawTexture(lg);
-
     return logits;
   }
 
+/**
+ * Read back the [W×H] texture, normalize to [0..1],
+ * draw as a blockSize×blockSize gray square.
+ */
+private _drawLayerToCanvas(
+  layer: number,
+  tex: WebGLTexture,
+  W: number,
+  H: number
+) {
+  // 1) read back only the real activations (ignore pad)
+  const raw = this._readTex(tex, W, H).subarray(0, W * H);
+  let realMin = Infinity, realMax = -Infinity;
+  for (const v of raw) {
+    if (v < realMin) realMin = v;
+    if (v > realMax) realMax = v;
+  }
+  const mid   = (realMax + realMin) / 2;
+  const scale = 5 / (realMax - realMin || 1);  // 5 is a tunable “contrast” factor
+
+  // 2) build your 28×28 grid
+  const gridSize  = 28;
+  const blockSize = 4;
+  const total     = gridSize * gridSize;
+  const canvas    = this.layerCanvases[layer]!;
+  const ctx       = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  for (let i = 0; i < total; i++) {
+    // get raw value or zero-pad
+    const v = i < raw.length ? raw[i] : 0;
+    // nonlinear map: tanh around the midpoint
+    const t = Math.tanh((v - mid) * scale);
+    const norm = (t + 1) / 2;           // now in [0..1]
+    const c    = Math.floor(norm * 255);
+    const x    = (i % gridSize) * blockSize;
+    const y    = Math.floor(i / gridSize) * blockSize;
+    ctx.fillStyle = `rgb(${c},${c},${c})`;
+    ctx.fillRect(x, y, blockSize, blockSize);
+  }
+}
+
+
+/**
+ * Draw only the last 56×56 slice of the seqLen×seqLen attention,
+ * using 4×4px blocks so the canvas is 224×224px.
+ */
+private _drawAttentionHead(
+  head: number,
+  tex: WebGLTexture,
+  seqLen: number
+) {
+  // how many tokens to display
+  const windowSize = 28;
+  const blockSize  = 4;
+
+  // read back full attention map
+  const raw = this._readTex(tex, seqLen, seqLen);
+
+  // compute where our 56×56 window starts
+  const start = Math.max(0, seqLen - windowSize);
+
+  // grab & clear the canvas
+  const canvas = this.attentionCanvases[head]!;
+  const ctx    = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // draw each cell as a blockSize×blockSize square
+  for (let y = 0; y < windowSize; y++) {
+    for (let x = 0; x < windowSize; x++) {
+      const srcY = start + y;
+      const srcX = start + x;
+
+      // if outside real seq, treat as zero
+      const p =
+        srcY < seqLen && srcX < seqLen
+          ? raw[srcY * seqLen + srcX]
+          : 0;
+
+      const c = Math.floor(p * 255);
+      ctx.fillStyle = `rgb(${c},${c},${c})`;
+      ctx.fillRect(
+        x * blockSize,
+        y * blockSize,
+        blockSize,
+        blockSize
+      );
+    }
+  }
+}
 
   private softmax(x: Float32Array) {
     let m = -Infinity;

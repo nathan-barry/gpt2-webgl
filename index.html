@@ -13,13 +13,23 @@
 <body>
   <h1>GPT-2 WebGL Inference Demo</h1>
 
-  <textarea id="inputText" rows="4">Hello, world</textarea>
+  <textarea id="inputText" rows="8">Hello, world</textarea>
   <div id="controls">
     <button id="startBtn">Start</button>
     <button id="stopBtn" disabled>Stop</button>
   </div>
 
-  <canvas id="glcanvas" width="512" height="512"></canvas>
+  <h2>Transformer Block Outputs</h2>
+  <div id="layerCanvases" style="display:flex; flex-wrap:wrap; gap:8px">
+    <!-- canvases will be injected here -->
+  </div>
+
+  <h2>Attention Matrix Outputs</h2>
+  <div id="attentionCanvases" style="display:flex; flex-wrap:wrap; gap:8px">
+    <!-- canvases will be injected here -->
+  </div>
+
+  <canvas id="glcanvas" hidden></canvas>
 
   <script type="module" src="src/main.ts"></script>
 </body>
