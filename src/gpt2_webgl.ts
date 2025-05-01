@@ -642,16 +642,9 @@ export class GPT2WebGL {
         this.nEmbeds, L
       );
       if (layer === 0) {
-        // print the "raw" matMul result
-        this.debugPrint("Block 0 — Q (pre-bias)", Q, this.nEmbeds, L);
-        // print after adding bias
-        this.debugPrint("Block 0 — Q (post-bias)", Qb, this.nEmbeds, L);
-
-        this.debugPrint("Block 0 — K (pre-bias)", K, this.nEmbeds, L);
-        this.debugPrint("Block 0 — K (post-bias)", Kb, this.nEmbeds, L);
-
-        this.debugPrint("Block 0 — V (pre-bias)", V, this.nEmbeds, L);
-        this.debugPrint("Block 0 — V (post-bias)", Vb, this.nEmbeds, L);
+        this.debugPrint("Block 0 — Q", Qb, this.nEmbeds, L);
+        this.debugPrint("Block 0 — K", Kb, this.nEmbeds, L);
+        this.debugPrint("Block 0 — V", Vb, this.nEmbeds, L);
       }
 
 
