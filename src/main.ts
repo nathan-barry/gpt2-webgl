@@ -8,11 +8,11 @@ const PRINT_OUTPUT = true;
   const startB = document.getElementById("startBtn") as HTMLButtonElement;
   const stopB  = document.getElementById("stopBtn") as HTMLButtonElement;
 
-  const manifest: Record<string,string> =
-    await fetch("weights/manifest.json").then(r => {
-      if (!r.ok) throw new Error(`Manifest load ${r.status}`);
-      return r.json();
-    });
+  const raw = await fetch("weights/manifest.json").then(r => r.json());
+  const manifest: Record<string,string> = {};
+  for (const [name, path] of Object.entries(raw)) {
+    manifest[name] = `weights/${path}`;
+  }
 
   const model = new GPT2WebGL(canvas, manifest);
   await model.loadWeights();
