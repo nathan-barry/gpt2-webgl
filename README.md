@@ -63,24 +63,6 @@ Any changes under `src/` will trigger HMR and live-reload.
 
 ---
 
-## 📁 Project Structure
-
-```
-.
-├── public/                  # static assets served at `/`
-│   └── weights/             # GPT-2 weight binaries + manifest.json
-├── src/
-│   ├── gpt2_webgl.ts        # WebGL2 inference + shaders + tokenizer
-│   └── main.ts              # bootstrap: loads manifest, sets up UI
-├── download_weights.py      # Python script to fetch & dump weights
-├── index.html               # (copied by Vite) entrypoint HTML
-├── vite.config.ts           # Vite config
-├── package.json
-└── tsconfig.json
-```
-
----
-
 ## 📄 License
 
 MIT
