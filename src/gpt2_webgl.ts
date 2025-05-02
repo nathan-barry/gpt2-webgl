@@ -1,7 +1,6 @@
 import { encodingForModel, Tiktoken } from "js-tiktoken";
 
 const DEBUG_LAYER = -1;
-const DISPLAY_LAYER = 0
 
 interface WeightManifest {
   [key: string]: string;
@@ -20,7 +19,6 @@ export class GPT2WebGL {
   public nLayers = 12;
   public nHeads = 12;
   public nCtx = 1024;
-
 
   // will hold a 2D canvas per layer
   private layerCanvases: HTMLCanvasElement[] = [];
