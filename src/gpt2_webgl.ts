@@ -982,26 +982,63 @@ private _drawAttentionHead(
     return y;
   }
 
-  private sample(probs: Float32Array) {
-    // max
-    let m = 0,
-      idx = 0;
-    for (let i = 0; i < probs.length; i++) {
-      if (probs[i] > m) {
-        m = probs[i];
-        idx = i;
-      }
+  private sample(
+    probs: Float32Array,
+    {
+      temperature = 1.0,  // >1.0 makes distribution flatter; <1.0 sharper
+      topK = 0,           // 0 = disabled
+      topP = 1.0          // 1.0 = disabled
+    }: { temperature?: number; topK?: number; topP?: number } = {}
+  ): number {
+    const N = probs.length;
+    // 1) apply temperature
+    const scaled = new Float64Array(N);
+    let sum = 0;
+    for (let i = 0; i < N; i++) {
+      // avoid zero-division; good to add a tiny ε if you see NaNs
+      scaled[i] = Math.pow(probs[i], 1.0 / temperature);
+      sum += scaled[i];
     }
-    return idx;
+    for (let i = 0; i < N; i++) {
+      scaled[i] /= sum;
+    }
 
-    // // stochastic
-    // const r = Math.random();
-    // let cum = 0;
-    // for (let i = 0; i < probs.length; i++) {
-    //   cum += probs[i];
-    //   if (r < cum) return i;
-    // }
-    // return probs.length - 1;
+    // 2) create list of [idx, p] and sort descending
+    const cand: { idx: number; p: number }[] = [];
+    for (let i = 0; i < N; i++) {
+      cand.push({ idx: i, p: scaled[i] });
+    }
+    cand.sort((a, b) => b.p - a.p);
+
+    // 3) apply top-K cutoff
+    if (topK > 0 && topK < cand.length) {
+      cand.length = topK;
+    }
+
+    // 4) apply top-P (nucleus) cutoff
+    if (topP < 1.0) {
+      let cum = 0;
+      let cutoff = 0;
+      for (; cutoff < cand.length; cutoff++) {
+        cum += cand[cutoff].p;
+        if (cum >= topP) break;
+      }
+      cand.length = cutoff + 1;
+    }
+
+    // 5) renormalize the remaining candidates
+    let tot = 0;
+    for (const c of cand) tot += c.p;
+    for (const c of cand) c.p /= tot;
+
+    // 6) multinomial draw
+    const r = Math.random();
+    let accumulator = 0;
+    for (const c of cand) {
+      accumulator += c.p;
+      if (r < accumulator) return c.idx;
+    }
+    return cand[cand.length - 1].idx;  // fallback
   }
 
   async generate(
