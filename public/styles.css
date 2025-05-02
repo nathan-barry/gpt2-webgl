@@ -1,0 +1,144 @@
+/* styles.css */
+:root {
+  /* Dark mode palette */
+  --bg: #0a0a0a;
+  --surface: #1a1a1a;
+  --border: #2f2f2f;
+  --text: #e5e7eb;
+  --heading: #ffffff;
+  --accent: #7c3aed;
+  --danger: #f87171;
+  --radius: 0.5rem;
+  --gap: 1rem;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+h1,
+h2 {
+  margin-bottom: 1.8rem; /* space below each header */
+}
+
+body {
+  font-family: 'Inter', system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Grid container for 2x2 layout */
+#appGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "controls layer"
+    "firstAttn lastAttn";
+  gap: var(--gap);
+  width: 100%;
+  max-width: 1200px;
+}
+
+/* Section styling */
+#controlsSection {
+  grid-area: controls;
+  background: var(--surface);
+  padding: var(--gap);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+#layerSection {
+  grid-area: layer;
+  display: grid;
+  grid-template-columns: repeat(4, 112px);
+  gap: var(--gap);
+}
+#firstAttnSection {
+  grid-area: firstAttn;
+  display: grid;
+  grid-template-columns: repeat(4, 112px);
+  gap: var(--gap);
+}
+#lastAttnSection {
+  grid-area: lastAttn;
+  display: grid;
+  grid-template-columns: repeat(4, 112px);
+  gap: var(--gap);
+}
+
+/* Canvas styling */
+canvas {
+  width: 112px;
+  height: 112px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+textarea {
+  width: 90%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  font-size: 1rem;
+  resize: vertical;
+}
+
+/* Buttons: black & white scheme */
+button {
+  font-family: 'Inter';
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  padding: 0.75rem 1.5rem;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+button#stopBtn {
+  background: #000;
+  color: #fff;
+}
+button#stopBtn:hover:not(:disabled) {
+  background: #333;
+}
+button#startBtn {
+  background: #fff;
+  color: #000;
+  border: 1px solid #000;
+}
+button#startBtn:hover:not(:disabled) {
+  background: #e5e5e5;
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Hide the debug WebGL canvas */
+#glcanvas {
+  display: none !important;
+}
+
+/* 4-column dashboard grid */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: var(--gap);
+  align-items: start;
+  margin-bottom: var(--gap);
+  margin-left: 64px;
+  margin-right: 64px;
+}

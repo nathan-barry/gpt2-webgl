@@ -3,39 +3,41 @@
 <head>
   <meta charset="UTF-8">
   <title>GPT-2 WebGL Inference</title>
-  <style>
-    body { font-family: sans-serif; padding: 1rem; }
-    #glcanvas { border:1px solid #ccc; width:512px; height:512px; }
-    textarea { width: 512px; }
-    #controls { margin-top: .5rem; }
-  </style>
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <h1>GPT-2 WebGL Inference Demo</h1>
 
-  <textarea id="inputText" rows="8">Hello, world</textarea>
-  <div id="controls">
-    <button id="startBtn">Start</button>
-    <button id="stopBtn" disabled>Stop</button>
-  </div>
+  <div class="dashboard-grid">
+    <!-- ───── Column 1: Text & Controls ───── -->
+    <div class="sidebar">
+      <h1>GPT-2 WebGL Inference Demo</h1>
+      <textarea id="inputText" rows="8">Hello, world</textarea>
+      <div id="controls">
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+      </div>
+    </div>
 
-  <h2>Transformer Block Outputs</h2>
-  <div id="layerCanvases" style="display:flex; flex-wrap:wrap; gap:8px">
-    <!-- canvases will be injected here -->
-  </div>
+    <!-- ───── Column 2: Transformer Blocks ───── -->
+    <div class="transformer-blocks">
+      <h2>Transformer Block Outputs</h2>
+      <div id="layerCanvases"></div>
+    </div>
 
-  <h2>First Layer Attention Matrices</h2>
-  <div id="firstAttentionCanvases" style="display:flex; flex-wrap:wrap; gap:8px">
-    <!-- canvases will be injected here -->
-  </div>
+    <!-- ───── Column 3: First Layer Attention ───── -->
+    <div class="first-attn">
+      <h2>First Layer Attention Matrices</h2>
+      <div id="firstAttentionCanvases"></div>
+    </div>
 
-  <h2>Last Layer Attention Matrices</h2>
-  <div id="lastAttentionCanvases" style="display:flex; flex-wrap:wrap; gap:8px">
-    <!-- canvases will be injected here -->
+    <!-- ───── Column 4: Last Layer Attention ───── -->
+    <div class="last-attn">
+      <h2>Last Layer Attention Matrices</h2>
+      <div id="lastAttentionCanvases"></div>
+    </div>
   </div>
 
   <canvas id="glcanvas" hidden></canvas>
-
   <script type="module" src="src/main.ts"></script>
 </body>
 </html>
