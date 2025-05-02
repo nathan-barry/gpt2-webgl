@@ -9,7 +9,7 @@ const PRINT_OUTPUT = true;
   const stopB  = document.getElementById("stopBtn") as HTMLButtonElement;
 
   const manifest: Record<string,string> =
-    await fetch("/weights/manifest.json").then(r => {
+    await fetch("weights/manifest.json").then(r => {
       if (!r.ok) throw new Error(`Manifest load ${r.status}`);
       return r.json();
     });

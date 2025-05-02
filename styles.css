@@ -1,4 +1,5 @@
-/* styles.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
 :root {
   /* Dark mode palette */
   --bg: #0a0a0a;
@@ -11,8 +12,6 @@
   --radius: 0.5rem;
   --gap: 1rem;
 }
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
 
 * {
   box-sizing: border-box;
