@@ -1,6 +1,8 @@
 # GPT-2 WebGL Inference Demo
 
-A browser-based, WebGL2 implementation of GPT-2 forward inference with on-the-fly tokenization.
+A browser-based, WebGL2 implementation of GPT-2.
+
+![Demo](assets/demo.gif)
 
 ## 🚀 Features
 
