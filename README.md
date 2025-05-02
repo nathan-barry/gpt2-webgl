@@ -63,20 +63,6 @@ Any changes under `src/` will trigger HMR and live-reload.
 
 ---
 
-## 📦 Production Build
-
-When you’re ready to deploy:
-
-```bash
-npm run build
-```
-
-- Vite will compile and bundle everything into `dist/`  
-- Your `index.html` and assets will be output there  
-- Simply serve `dist/` with any static file server
-
----
-
 ## 📁 Project Structure
 
 ```
@@ -92,3 +78,10 @@ npm run build
 ├── package.json
 └── tsconfig.json
 ```
+
+---
+
+## 📄 License
+
+MIT
+
