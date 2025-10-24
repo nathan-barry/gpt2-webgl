@@ -4,7 +4,7 @@ A browser-based, WebGL2 implementation of GPT-2.
 
 ![Demo](assets/demo.gif)
 
-## 🚀 Features
+## Features
 
 - Full GPT-2 small (117M) forward pass in the GPU via WebGL2 shaders  
 - BPE tokenization using `js-tiktoken` in the browser (no WASM fetch)
@@ -12,7 +12,7 @@ A browser-based, WebGL2 implementation of GPT-2.
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
 - **Node.js** ≥ 16.x and **npm**  
 - **Python** ≥ 3.8  
@@ -20,7 +20,7 @@ A browser-based, WebGL2 implementation of GPT-2.
 
 ---
 
-## 🐍 Download the GPT-2 Weights
+## Download the GPT-2 Weights
 
 We rely on HuggingFace’s `transformers` to pull down the official GPT-2 weights and emit raw `Float32Array` blobs:
 
@@ -42,7 +42,7 @@ We rely on HuggingFace’s `transformers` to pull down the official GPT-2 weight
 
 ---
 
-## ⚙️  Front-end Setup with Vite
+## Front-end Setup with Vite
 
 We use Vite to bundle TS, serve ESM modules & handle `js-tiktoken`:
 
@@ -63,7 +63,6 @@ Any changes under `src/` will trigger HMR and live-reload.
 
 ---
 
-## 📄 License
+## License
 
 MIT
-
