@@ -308,9 +308,6 @@ export class GPT2WebGL {
         o = vec4(val,0,0,1);
       }`;
 
-    // reuse matmul for matMul2
-    const matmul2 = matmul;
-
     // residual sum 
     const add = `#version 300 es
       precision highp float;
@@ -387,7 +384,6 @@ export class GPT2WebGL {
       ["layerNorm", layerNorm],
       ["attnScore", attnScore],
       ["softmax", softmax],
-      ["matMul2", matmul2],
     ] as [string, string][]) {
       this.programs[name] = this._createProgram(vsrc, src);
     }
